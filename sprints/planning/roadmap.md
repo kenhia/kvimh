@@ -5,15 +5,12 @@
 
 ## Now
 
-- **Sprint 001 — hearing check and A/B listening test.** One small desktop
-  tool, offline, no drivers:
-  - per-ear tone thresholds through the listener's own headset, saved as a
-    profile
-  - the DSP core: frequency lowering (compression and transposition
-    variants), profile-shaped EQ, compression, hard output limiter
-  - speech clips rendered several ways and played blind, with the picks
-    recorded
-  - the outcome is a decision: does this help, and with which settings
+- **Listening.** Sprint 001 built the offline tool (hearing check, listen
+  and tweak, blind test — see `sprints/001-hearing-check-ab-test.md`). What
+  it is for has not happened yet: the listener runs the check, captures a
+  few hard voices, and does several blind rounds. The outcome is a decision:
+  does this help, and with which settings.
+- Fix whatever that first real use turns up.
 
 ## Next
 
