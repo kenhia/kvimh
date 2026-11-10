@@ -1,0 +1,10 @@
+[package]
+name = "kvimh"
+version = "0.1.0"
+edition = "2024"
+description = "Hearing-assist audio for Windows: frequency lowering, EQ and compression that make speech consonants audible"
+license = "MIT"
+repository = "https://github.com/kenhia/kvimh"
+publish = false
+
+[dependencies]

@@ -1,0 +1,52 @@
+# kvimh
+
+*Voices in my head.* Hearing-assist audio for Windows.
+
+With high-frequency hearing loss you can tell that someone is speaking but
+lose which word it was: the consonants that separate words (s, f, th, sh, t,
+k) carry most of their energy between about 3 and 8 kHz, above where the
+hearing still works. Turning the treble up does not bring back a band that is
+gone, and lowering the whole voice makes everyone sound slowed down.
+
+kvimh takes the approach hearing aids call **frequency lowering**: everything
+below a cutoff is left alone, and the band above it is compressed or shifted
+down into the range the listener can still hear. Around that sit an equalizer
+shaped to the listener's own measured thresholds, and compression with a hard
+output limiter so quiet consonants come up without loud sounds getting louder.
+
+## Status
+
+A fresh scaffold. Nothing processes audio yet.
+
+## Plan
+
+1. **Hearing check and A/B listening test.** Measure per-ear thresholds
+   through the listener's own headset, then render speech clips several ways
+   and let the listener pick what helps. Offline; no drivers, no changes to
+   the audio setup.
+2. **Live system audio.** Run everything the PC plays through the chosen
+   processing, with low enough latency that video stays in sync.
+3. **Microphone chain.** The same engine pointed the other way, to clean up
+   and level a voice for reading aloud to remote listeners.
+
+The roadmap is in [sprints/planning/roadmap.md](sprints/planning/roadmap.md).
+
+## Not a medical device
+
+kvimh is a personal tool, not a hearing aid and not a substitute for an
+audiologist. Its hearing check is a relative measurement on one headset, not a
+clinical audiogram.
+
+## Development
+
+Rust, on Windows. The repo uses the
+[kprojects](https://github.com/kenhia/kprojects) harness:
+
+```sh
+just          # list recipes
+just check    # fmt, clippy, tests — the gate
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

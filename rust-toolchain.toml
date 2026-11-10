@@ -1,0 +1,7 @@
+[toolchain]
+# Mirrored from krcmd: a concrete pin, not `stable` — a float describes
+# whatever `rustup update` last fetched on that box, not a build. kvimh builds
+# and runs on Windows only. Moving the pin is the fleet's update cycle, not a
+# one-line edit.
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
