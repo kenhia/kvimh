@@ -16,7 +16,17 @@ output limiter so quiet consonants come up without loud sounds getting louder.
 
 ## Status
 
-A fresh scaffold. Nothing processes audio yet.
+Step 1 of the plan is built: an offline tool with a hearing check, a
+listen-and-tweak screen and a blind A/B test. Nothing processes live system
+audio yet.
+
+```sh
+just run            # open the window
+just run devices    # list output devices; plays nothing
+```
+
+The listener's hearing profile, captured clips and test results are kept in
+the user data folder (`%APPDATA%\kvimh`), not in this repository.
 
 ## Plan
 

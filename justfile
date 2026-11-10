@@ -12,6 +12,10 @@ check:
     cargo clippy --all-targets -- -D warnings
     cargo test
 
+# Open the app (optimised build)
+run *args:
+    cargo run --release -- {{args}}
+
 # Apply formatting
 fmt:
     cargo fmt

@@ -67,12 +67,28 @@ range, with an EQ shaped to the listener's measured thresholds and compression
 around it. korg project `kvimh`; the design reasoning is in that project's
 notes.
 
-**Status:** fresh scaffold — `src/main.rs` is a placeholder. Sprint 001 builds
-the hearing check and the offline A/B listening test.
+**Status:** sprint 001 built the offline tool — hearing check, listen-and-tweak
+screen, blind A/B test. Nothing processes live system audio yet.
+
+### Layout
+
+- `src/dsp/` — the I/O-free core: `spectral` (frequency lowering + EQ in one
+  STFT), `compressor`, `limiter`, `tone`.
+- `src/profile.rs` — hearing profile, estimated loss, EQ points, suggested
+  lowering. `src/render.rs` — offline chain and the blind-test presets.
+- `src/audio.rs` — the only module that touches a sound device (cpal).
+- `src/check.rs`, `src/app.rs` — the hearing-check state machine and the
+  egui window (binary crate).
+- The listener's profile, clips and results live in the user data folder
+  (`%APPDATA%\kvimh`), never in the repo.
 
 ### Build and test
 
 - `just check` — `cargo fmt --check`, `cargo clippy --all-targets`, `cargo test`.
+- `just run` opens the window. `kvimh devices` and `kvimh render <in.wav> <dir>`
+  make no sound; `--tab <name> --demo` opens a screen with made-up data.
+- **Never play audio from an agent session** — it comes out of the listener's
+  headset. Verify with tests, `devices`, `render`, and demo-mode screenshots.
 - Windows only, developed on the machine it runs on. Audio cannot be judged
   by a test: DSP gets unit tests on synthetic signals (a tone at X comes out
   at Y, the limiter never exceeds its ceiling), and whether it *helps* is
