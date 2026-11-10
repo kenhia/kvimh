@@ -60,6 +60,11 @@ impl Check {
             .into_iter()
             .flat_map(|ear| order.map(|hz| (ear, hz)))
             .collect();
+        Check::for_tones(now, device, queue)
+    }
+
+    /// A check of just these tones — used to retest one reading.
+    pub fn for_tones(now: f64, device: &str, queue: Vec<(Ear, f32)>) -> Check {
         let mut check = Check {
             queue,
             idx: 0,

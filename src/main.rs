@@ -43,7 +43,19 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
-    // `--tab check|listen|blind` opens on that screen; `--demo` shows the
+    if args.get(1).map(String::as_str) == Some("words") {
+        // Make the word-test recordings (files only, no sound) and report.
+        match kvimh::words::prepare() {
+            Ok(voices) => println!("word recordings ready: {}", voices.join(", ")),
+            Err(e) => {
+                eprintln!("kvimh: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // `--tab check|listen|blind|words` opens on that screen; `--demo` shows the
     // screens with made-up data instead of the listener's own.
     let demo = args.iter().any(|a| a == "--demo");
     let tab = args

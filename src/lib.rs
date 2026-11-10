@@ -10,3 +10,4 @@ pub mod dsp;
 pub mod profile;
 pub mod render;
 pub mod wav;
+pub mod words;
