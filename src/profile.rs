@@ -75,10 +75,27 @@ pub struct Profile {
     pub device: String,
     pub left: Vec<Threshold>,
     pub right: Vec<Threshold>,
-    #[serde(default)]
-    pub tinnitus_left: Option<Tinnitus>,
-    #[serde(default)]
-    pub tinnitus_right: Option<Tinnitus>,
+    /// Matched tinnitus tones, any number per ear, sorted by pitch.
+    #[serde(default, deserialize_with = "tones")]
+    pub tinnitus_left: Vec<Tinnitus>,
+    #[serde(default, deserialize_with = "tones")]
+    pub tinnitus_right: Vec<Tinnitus>,
+}
+
+/// Reads a list of tinnitus tones, and also what earlier versions saved:
+/// a single tone, or nothing.
+fn tones<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Tinnitus>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Many(Vec<Tinnitus>),
+        One(Tinnitus),
+    }
+    Ok(match Option::<Saved>::deserialize(d)? {
+        Some(Saved::Many(v)) => v,
+        Some(Saved::One(t)) => vec![t],
+        None => Vec::new(),
+    })
 }
 
 impl Profile {
@@ -96,18 +113,30 @@ impl Profile {
         }
     }
 
-    pub fn tinnitus(&self, ear: Ear) -> Option<Tinnitus> {
+    pub fn tinnitus(&self, ear: Ear) -> &[Tinnitus] {
         match ear {
-            Ear::Left => self.tinnitus_left,
-            Ear::Right => self.tinnitus_right,
+            Ear::Left => &self.tinnitus_left,
+            Ear::Right => &self.tinnitus_right,
         }
     }
 
-    pub fn set_tinnitus(&mut self, ear: Ear, tinnitus: Option<Tinnitus>) {
+    pub fn tinnitus_mut(&mut self, ear: Ear) -> &mut Vec<Tinnitus> {
         match ear {
-            Ear::Left => self.tinnitus_left = tinnitus,
-            Ear::Right => self.tinnitus_right = tinnitus,
+            Ear::Left => &mut self.tinnitus_left,
+            Ear::Right => &mut self.tinnitus_right,
         }
+    }
+
+    pub fn has_tinnitus(&self) -> bool {
+        !self.tinnitus_left.is_empty() || !self.tinnitus_right.is_empty()
+    }
+
+    /// Add a matched tone, keeping the ear's tones sorted by pitch. Ringing
+    /// is often more than one tone, so an ear can hold several.
+    pub fn add_tinnitus(&mut self, ear: Ear, tone: Tinnitus) {
+        let list = self.tinnitus_mut(ear);
+        list.push(tone);
+        list.sort_by(|a, b| a.hz.total_cmp(&b.hz));
     }
 
     /// Replace (or add) the threshold for one tone.
@@ -228,20 +257,24 @@ impl Profile {
             .into_iter()
             .map(|(hz, loss)| (hz, (loss * strength).clamp(0.0, max_gain_db.max(0.0))))
             .collect();
-        let (Some(t), true) = (self.tinnitus(ear), guard && !points.is_empty()) else {
+        if !guard || points.is_empty() {
             return points;
-        };
-        let (lo, hi) = (t.hz / GUARD_RATIO, t.hz * GUARD_RATIO);
-        let (inner_lo, inner_hi) = (t.hz / GUARD_RATIO.sqrt(), t.hz * GUARD_RATIO.sqrt());
-        let (gain_lo, gain_hi) = (interp_log_hz(&points, lo), interp_log_hz(&points, hi));
-        points.retain(|p| p.0 < lo || p.0 > hi);
-        points.extend([
-            (lo, gain_lo),
-            (inner_lo, 0.0),
-            (inner_hi, 0.0),
-            (hi, gain_hi),
-        ]);
-        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        // Carve one gap per matched tone. Each carve reads the curve as the
+        // previous one left it, so guards that overlap merge cleanly.
+        for t in self.tinnitus(ear) {
+            let (lo, hi) = (t.hz / GUARD_RATIO, t.hz * GUARD_RATIO);
+            let (inner_lo, inner_hi) = (t.hz / GUARD_RATIO.sqrt(), t.hz * GUARD_RATIO.sqrt());
+            let (gain_lo, gain_hi) = (interp_log_hz(&points, lo), interp_log_hz(&points, hi));
+            points.retain(|p| p.0 < lo || p.0 > hi);
+            points.extend([
+                (lo, gain_lo),
+                (inner_lo, 0.0),
+                (inner_hi, 0.0),
+                (hi, gain_hi),
+            ]);
+            points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
         points
     }
 
@@ -438,12 +471,12 @@ mod tests {
     #[test]
     fn tinnitus_guard_removes_the_boost_around_the_matched_pitch_only() {
         let mut p = notched();
-        p.set_tinnitus(
+        p.add_tinnitus(
             Ear::Right,
-            Some(Tinnitus {
+            Tinnitus {
                 hz: 3_800.0,
                 dbfs: -40.0,
-            }),
+            },
         );
         let open = p.eq_points(Ear::Right, 0.5, 20.0, false);
         let guarded = p.eq_points(Ear::Right, 0.5, 20.0, true);
@@ -563,6 +596,69 @@ mod tests {
     fn a_profile_saved_before_tinnitus_matching_still_loads() {
         let old = r#"{"taken_unix":1,"device":"d","left":[{"hz":1000.0,"dbfs":-60.0}],"right":[]}"#;
         let p: Profile = serde_json::from_str(old).unwrap();
-        assert_eq!((p.tinnitus_left, p.tinnitus_right), (None, None));
+        assert!(!p.has_tinnitus());
+    }
+
+    #[test]
+    fn a_profile_with_one_tone_per_ear_loads_as_lists_and_round_trips() {
+        // What the single-tone version wrote: an object, or null.
+        let old = r#"{"taken_unix":1,"device":"d","left":[],"right":[],
+            "tinnitus_left":null,"tinnitus_right":{"hz":5000.0,"dbfs":-40.0}}"#;
+        let mut p: Profile = serde_json::from_str(old).unwrap();
+        assert!(p.tinnitus_left.is_empty());
+        assert_eq!(
+            p.tinnitus_right,
+            vec![Tinnitus {
+                hz: 5_000.0,
+                dbfs: -40.0
+            }]
+        );
+
+        p.add_tinnitus(
+            Ear::Right,
+            Tinnitus {
+                hz: 3_000.0,
+                dbfs: -50.0,
+            },
+        );
+        let hz: Vec<f32> = p.tinnitus(Ear::Right).iter().map(|t| t.hz).collect();
+        assert_eq!(hz, vec![3_000.0, 5_000.0]);
+        let again: Profile = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(again, p);
+    }
+
+    #[test]
+    fn every_matched_tone_gets_its_own_guard() {
+        let mut p = profile_from([Some(40.0); 11]);
+        // A flat 40 dB "loss" everywhere would be anchored to zero, so make
+        // the mids good and everything from 3 kHz up poor.
+        for t in p.right.iter_mut().filter(|t| t.hz <= 2_000.0) {
+            t.dbfs = t.dbfs.map(|d| d - 40.0);
+        }
+        p.add_tinnitus(
+            Ear::Right,
+            Tinnitus {
+                hz: 8_500.0,
+                dbfs: -36.0,
+            },
+        );
+        p.add_tinnitus(
+            Ear::Right,
+            Tinnitus {
+                hz: 5_200.0,
+                dbfs: -36.0,
+            },
+        );
+        let open = p.eq_points(Ear::Right, 0.5, 20.0, false);
+        let guarded = p.eq_points(Ear::Right, 0.5, 20.0, true);
+        for hz in [5_200.0, 8_500.0] {
+            assert!(interp_log_hz(&open, hz) > 15.0);
+            assert_eq!(interp_log_hz(&guarded, hz), 0.0, "{hz} Hz");
+        }
+        // Between and outside the two guards the boost is untouched.
+        for hz in [3_500.0, 6_650.0, 11_500.0] {
+            let (a, b) = (interp_log_hz(&open, hz), interp_log_hz(&guarded, hz));
+            assert!((a - b).abs() < 0.01, "{hz} Hz: {a} vs {b}");
+        }
     }
 }

@@ -131,26 +131,51 @@ impl App {
         ui.add_space(12.0);
         ui.label(RichText::new("Tinnitus pitch (optional)").strong());
         ui.label(
-            "If you have a steady ringing, you can match its pitch here. kvimh then knows which band to be \
-             careful with: the EQ can leave it alone instead of boosting it.",
+            "If you have a steady ringing, you can match its pitch here. Ringing is often more than one \
+             tone, so add as many as you hear in each ear. kvimh then knows which bands to be careful \
+             with: the EQ can leave them alone instead of boosting them.",
         );
+        let mut remove = None;
         for (ear, colour) in [(Ear::Left, LEFT), (Ear::Right, RIGHT)] {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(ear_name(ear)).color(colour));
-                match p.tinnitus(ear) {
-                    Some(t) => ui.label(format!("ringing at about {}", khz(t.hz))),
-                    None => ui.weak("not matched"),
+                if p.tinnitus(ear).is_empty() {
+                    ui.weak("no tones matched");
+                }
+                for (i, t) in p.tinnitus(ear).iter().enumerate() {
+                    ui.label(format!("{} at {:.0} dB", khz(t.hz), t.dbfs));
+                    if ui
+                        .small_button("✖")
+                        .on_hover_text("Remove this tone")
+                        .clicked()
+                    {
+                        remove = Some((ear, i));
+                    }
+                    ui.separator();
+                }
+                let label = if p.tinnitus(ear).is_empty() {
+                    "Match a tone"
+                } else {
+                    "Add another tone"
                 };
-                if ui.button("Match").clicked() {
-                    let hz = p.tinnitus(ear).map_or(4_000.0, |t| t.hz);
+                if ui.button(label).clicked() {
                     self.matching = Some(Matching {
                         ear,
-                        hz,
+                        hz: 4_000.0,
                         dbfs: MATCH_FLOOR_DBFS,
                         playing: false,
                     });
                 }
             });
+        }
+        if let (Some((ear, i)), Some(profile)) = (remove, &mut self.profile) {
+            profile.tinnitus_mut(ear).remove(i);
+            self.status = match profile.save() {
+                Ok(_) => "Tinnitus tone removed.".into(),
+                Err(e) => format!("Could not save the change: {e}"),
+            };
+            self.processed = None;
+            self.blind = None;
         }
     }
 
@@ -213,28 +238,26 @@ impl App {
             }
         });
         ui.add_space(10.0);
-        let mut done: Option<Option<Tinnitus>> = None;
+        let mut done: Option<Tinnitus> = None;
         let mut cancel = false;
         ui.horizontal(|ui| {
-            if ui.button("This matches my ringing — save").clicked() {
-                done = Some(Some(Tinnitus {
+            if ui.button("This matches a tone I hear — save it").clicked() {
+                done = Some(Tinnitus {
                     hz: m.hz,
                     dbfs: m.dbfs,
-                }));
-            }
-            if ui.button("No steady ringing in this ear").clicked() {
-                done = Some(None);
+                });
             }
             if ui.button("Cancel").clicked() {
                 cancel = true;
             }
         });
-        if let Some(result) = done {
+        ui.weak("If you hear more than one tone in this ear, save this one and then add the next.");
+        if let Some(tone) = done {
             engine.stop();
-            profile.set_tinnitus(m.ear, result);
+            profile.add_tinnitus(m.ear, tone);
             self.status = match profile.save() {
-                Ok(_) => "Tinnitus match saved.".into(),
-                Err(e) => format!("Could not save the tinnitus match: {e}"),
+                Ok(_) => "Tinnitus tone saved.".into(),
+                Err(e) => format!("Could not save the tinnitus tone: {e}"),
             };
             self.matching = None;
             self.processed = None;

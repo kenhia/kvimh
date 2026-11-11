@@ -114,10 +114,16 @@ fn demo_profile() -> Profile {
         device: "demo".into(),
         left: ear(0.0, 22.0),
         right: ear(8.0, 0.0),
-        tinnitus_right: Some(Tinnitus {
-            hz: 3_600.0,
-            dbfs: -40.0,
-        }),
+        tinnitus_right: vec![
+            Tinnitus {
+                hz: 3_600.0,
+                dbfs: -40.0,
+            },
+            Tinnitus {
+                hz: 7_000.0,
+                dbfs: -45.0,
+            },
+        ],
         ..Profile::default()
     }
 }
@@ -693,10 +699,7 @@ impl App {
                 .step_by(1.0)
                 .text("dB — most the EQ may add"),
         );
-        let matched = self
-            .profile
-            .as_ref()
-            .is_some_and(|p| p.tinnitus_left.is_some() || p.tinnitus_right.is_some());
+        let matched = self.profile.as_ref().is_some_and(|p| p.has_tinnitus());
         ui.add_enabled(
             matched,
             egui::Checkbox::new(
@@ -1032,9 +1035,10 @@ fn audiogram(ui: &mut egui::Ui, profile: &Profile) {
             }
         }
     }
-    // The matched tinnitus pitch, as a dashed line in the ear's colour.
-    for (ear, colour) in [(Ear::Left, LEFT), (Ear::Right, RIGHT)] {
-        if let Some(t) = profile.tinnitus(ear) {
+    // Each matched tinnitus tone, as a dashed line in the ear's colour. The
+    // two ears' labels sit at different heights so close pitches stay legible.
+    for (ear, colour, label_up) in [(Ear::Left, LEFT, 14.0), (Ear::Right, RIGHT, 2.0)] {
+        for t in profile.tinnitus(ear) {
             let px = x(t.hz);
             let mut py = rect.top();
             while py < rect.bottom() {
@@ -1043,7 +1047,7 @@ fn audiogram(ui: &mut egui::Ui, profile: &Profile) {
                 py += 9.0;
             }
             painter.text(
-                egui::pos2(px, rect.bottom() - 2.0),
+                egui::pos2(px, rect.bottom() - label_up),
                 egui::Align2::CENTER_BOTTOM,
                 "ringing",
                 font.clone(),

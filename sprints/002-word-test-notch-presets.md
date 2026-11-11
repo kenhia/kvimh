@@ -41,7 +41,10 @@ most common mix-ups ("ship" heard as "sip").
 - A tone heard much more easily than both neighbours is flagged. That is
   what a key press on ringing instead of the tone looks like.
 - An optional **tinnitus pitch match** per ear: adjust a pulsed tone until
-  it sits on the ringing. Stored in the profile, drawn on the chart.
+  it sits on the ringing. Stored in the profile, drawn on the chart. An ear
+  can hold several tones — the first real use found two in one ear, and the
+  first build could only save one. Each tone gets its own EQ guard. Profiles
+  saved by the single-tone build still load.
 
 **Presets rebuilt from the measured shape.** Original · EQ at half the
 estimated loss · EQ at 80 % · EQ *sparing the tinnitus pitch* (or frequency
@@ -95,9 +98,17 @@ range, how far down, level).
 - Screens 2, 3 and 5 render in demo mode: the notch sentence, the flagged
   reading, the retest rows, the ringing marker on the chart.
 
+## First use
+
+The listener ran the word test, the pitch match and a retest; all worked.
+One session in quiet scored at or near the ceiling for every rendering, as
+predicted — quiet is too easy to separate them, so the sessions that matter
+are the ones with background noise. Every miss in that session was on the
+female voice.
+
 ## Not verified — the listener's part
 
-- The word test has never been run: nothing was played during the build.
+- Several tones per ear in the pitch match (built after the first use).
 - How natural the synthetic voices' consonants are. If "s" and "sh" from a
   synthesiser are easier or harder than a person's, the scores still compare
   renderings fairly, but may not transfer to real speech.

@@ -137,8 +137,7 @@ pub fn render(clip: &Clip, settings: &Settings, profile: Option<&Profile>) -> Cl
 ///   notch, the top octave copied down).
 pub fn presets(profile: Option<&Profile>) -> Vec<(&'static str, Settings)> {
     let half = Settings::default();
-    let has_tinnitus =
-        profile.is_some_and(|p| p.tinnitus_left.is_some() || p.tinnitus_right.is_some());
+    let has_tinnitus = profile.is_some_and(|p| p.has_tinnitus());
     let fourth = if has_tinnitus {
         (
             "EQ, sparing the tinnitus pitch",
@@ -305,10 +304,10 @@ mod tests {
         };
         assert!(src_lo_hz < 3_000.0 && src_hi_hz > 4_000.0);
 
-        p.tinnitus_right = Some(Tinnitus {
+        p.tinnitus_right = vec![Tinnitus {
             hz: 4_000.0,
             dbfs: -45.0,
-        });
+        }];
         let guarded = presets(Some(&p));
         assert!(
             guarded
@@ -321,10 +320,10 @@ mod tests {
     #[test]
     fn the_guard_changes_only_the_ear_with_a_tinnitus_match() {
         let mut p = notched_profile();
-        p.tinnitus_right = Some(Tinnitus {
+        p.tinnitus_right = vec![Tinnitus {
             hz: 3_500.0,
             dbfs: -45.0,
-        });
+        }];
         let sr = 48_000;
         let tone = sine(3_500.0, sr as f32, 0.05, 48_000);
         let c = Clip {
