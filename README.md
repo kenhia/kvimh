@@ -16,9 +16,15 @@ output limiter so quiet consonants come up without loud sounds getting louder.
 
 ## Status
 
-Step 1 of the plan is built: an offline tool with a hearing check, a
-listen-and-tweak screen and a blind A/B test. Nothing processes live system
-audio yet.
+Step 1 of the plan is built: an offline tool with a hearing check (including
+an optional tinnitus pitch match), a listen-and-tweak screen, a blind A/B
+test and a word-recognition test. Nothing processes live system audio yet.
+
+The first real use changed the picture: not every high-frequency loss is a
+missing top end. A dip in the middle of the consonant range, or a ringing
+that masks it, wants different handling — gain in the dip, gain that spares
+the ringing's pitch, or moving that band somewhere clearer. The word test
+exists to find out which.
 
 ```sh
 just run            # open the window

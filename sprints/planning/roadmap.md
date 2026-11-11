@@ -5,16 +5,19 @@
 
 ## Now
 
-- **Listening.** Sprint 001 built the offline tool (hearing check, listen
-  and tweak, blind test — see `sprints/001-hearing-check-ab-test.md`). What
-  it is for has not happened yet: the listener runs the check, captures a
-  few hard voices, and does several blind rounds. The outcome is a decision:
-  does this help, and with which settings.
-- Fix whatever that first real use turns up.
+- **Word-test results.** Sprint 001 built the offline tool; its first real
+  use showed the loss is a dip around 3–4 kHz, possibly tinnitus masking as
+  much as loss, and that preference ratings on a familiar clip measure
+  familiarity. Sprint 002 built the fairer measure (a word-recognition
+  test), a tinnitus pitch match, and presets shaped to the dip. What is
+  needed now is data: a few word-test sessions, in quiet and in noise.
+- The outcome is a decision between EQ alone, EQ that spares the tinnitus
+  pitch, and copying the dip's band lower down.
 
 ## Next
 
-- **Live system audio on the headset.** Decide the route first — processing
+- **Live system audio on the headset.** Wait for the word-test results: if
+  EQ alone wins, this needs no custom real-time engine. Decide the route first — processing
   hosted inside the Windows audio engine on the existing outputs, or a
   virtual audio device with our own capture/render app — then build it.
   Latency budget: video must stay in sync.

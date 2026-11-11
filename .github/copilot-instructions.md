@@ -67,8 +67,11 @@ range, with an EQ shaped to the listener's measured thresholds and compression
 around it. korg project `kvimh`; the design reasoning is in that project's
 notes.
 
-**Status:** sprint 001 built the offline tool — hearing check, listen-and-tweak
-screen, blind A/B test. Nothing processes live system audio yet.
+**Status:** the offline tool is built — hearing check with tinnitus pitch
+match, listen-and-tweak screen, blind A/B test, word-recognition test. The
+measured loss turned out to be a dip around 3–4 kHz (possibly tinnitus
+masking), so the open question is EQ vs. EQ sparing the tinnitus pitch vs.
+moving that band — the word test decides. Nothing processes live audio yet.
 
 ### Layout
 
@@ -77,8 +80,11 @@ screen, blind A/B test. Nothing processes live system audio yet.
 - `src/profile.rs` — hearing profile, estimated loss, EQ points, suggested
   lowering. `src/render.rs` — offline chain and the blind-test presets.
 - `src/audio.rs` — the only module that touches a sound device (cpal).
-- `src/check.rs`, `src/app.rs` — the hearing-check state machine and the
-  egui window (binary crate).
+- `src/words.rs` — the word test: word sets, speech synthesis to files,
+  noise, trial plan, scoring.
+- `src/check.rs`, `src/app.rs`, `src/app/` — the hearing-check state machine
+  and the egui window, one file per screen that outgrew `app.rs` (binary
+  crate).
 - The listener's profile, clips and results live in the user data folder
   (`%APPDATA%\kvimh`), never in the repo.
 

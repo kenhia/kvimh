@@ -32,7 +32,7 @@ impl Clip {
         self.len() as f32 / self.sr.max(1) as f32
     }
 
-    fn rms(&self) -> f32 {
+    pub fn rms(&self) -> f32 {
         let n = (self.left.len() + self.right.len()).max(1) as f64;
         let sum: f64 = self
             .left
@@ -41,6 +41,13 @@ impl Clip {
             .map(|v| (*v as f64).powi(2))
             .sum();
         (sum / n).sqrt() as f32
+    }
+
+    pub fn scale(&mut self, gain: f32) {
+        self.left
+            .iter_mut()
+            .chain(self.right.iter_mut())
+            .for_each(|v| *v *= gain);
     }
 }
 
@@ -51,6 +58,9 @@ pub struct Settings {
     pub eq_strength: f32,
     pub max_eq_gain_db: f32,
     pub compress: bool,
+    /// Leave the band around the matched tinnitus pitch un-boosted.
+    #[serde(default)]
+    pub tinnitus_guard: bool,
 }
 
 impl Settings {
@@ -60,6 +70,7 @@ impl Settings {
         eq_strength: 0.0,
         max_eq_gain_db: 20.0,
         compress: false,
+        tinnitus_guard: false,
     };
 
     pub fn is_bypass(&self) -> bool {
@@ -70,13 +81,11 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            lowering: Lowering::Compress {
-                cutoff_hz: 2_000.0,
-                ratio: 2.0,
-            },
+            lowering: Lowering::Off,
             eq_strength: 0.5,
             max_eq_gain_db: 20.0,
             compress: true,
+            tinnitus_guard: false,
         }
     }
 }
@@ -92,7 +101,12 @@ pub fn render(clip: &Clip, settings: &Settings, profile: Option<&Profile>) -> Cl
             let mut spectral = Spectral::new(sr);
             spectral.set_lowering(settings.lowering);
             if let (Some(p), true) = (profile, settings.eq_strength > 0.0) {
-                let points = p.eq_points(ear, settings.eq_strength, settings.max_eq_gain_db);
+                let points = p.eq_points(
+                    ear,
+                    settings.eq_strength,
+                    settings.max_eq_gain_db,
+                    settings.tinnitus_guard,
+                );
                 spectral.set_gain_curve(&points);
             }
             *chan = spectral.process_all(chan);
@@ -104,11 +118,7 @@ pub fn render(clip: &Clip, settings: &Settings, profile: Option<&Profile>) -> Cl
         // must not be turned into noise).
         let (before, after) = (clip.rms(), out.rms());
         if after > 1e-6 {
-            let g = (before / after).min(4.0);
-            out.left
-                .iter_mut()
-                .chain(out.right.iter_mut())
-                .for_each(|v| *v *= g);
+            out.scale((before / after).min(4.0));
         }
     }
     Limiter::new(sr, CEILING_DB, 80.0).process_block(&mut out.left);
@@ -116,41 +126,64 @@ pub fn render(clip: &Clip, settings: &Settings, profile: Option<&Profile>) -> Cl
     out
 }
 
-/// The renderings compared in the blind test.
+/// The renderings compared in the blind test and the word test, built from
+/// the shape of the measured hearing:
+///
+/// - the original;
+/// - EQ at the usual half of the estimated loss, and at a fuller 80 %;
+/// - if a tinnitus pitch was matched, the half-gain EQ with the band around
+///   that pitch left alone — otherwise frequency compression;
+/// - the notch band copied down to where hearing is clear (or, with no
+///   notch, the top octave copied down).
 pub fn presets(profile: Option<&Profile>) -> Vec<(&'static str, Settings)> {
-    let auto = profile.map(|p| p.suggest_compress());
-    let (cutoff, ratio) = match auto {
-        Some(Lowering::Compress { cutoff_hz, ratio }) => (cutoff_hz, ratio),
-        _ => (2_000.0, 2.0),
+    let half = Settings::default();
+    let has_tinnitus = profile.is_some_and(|p| p.has_tinnitus());
+    let fourth = if has_tinnitus {
+        (
+            "EQ, sparing the tinnitus pitch",
+            Settings {
+                tinnitus_guard: true,
+                ..half
+            },
+        )
+    } else {
+        let lowering = profile
+            .map(|p| p.suggest_compress())
+            .unwrap_or(Lowering::Compress {
+                cutoff_hz: 2_000.0,
+                ratio: 2.0,
+            });
+        ("Frequency compression", Settings { lowering, ..half })
     };
-    let base = Settings::default();
-    let with = |lowering| Settings { lowering, ..base };
+    let copy = profile.and_then(|p| p.suggest_notch_copy());
+    let fifth = match copy {
+        Some(lowering) => ("Notch band copied down", Settings { lowering, ..half }),
+        None => (
+            "Highs copied an octave down",
+            Settings {
+                lowering: Lowering::Transpose {
+                    src_lo_hz: 4_000.0,
+                    src_hi_hz: 9_000.0,
+                    factor: 0.5,
+                    mix_db: 0.0,
+                },
+                ..half
+            },
+        ),
+    };
     vec![
         ("Original", Settings::BYPASS),
-        ("EQ and compression only", with(Lowering::Off)),
+        ("EQ, half gain", half),
         (
-            "Gentle frequency compression",
-            with(Lowering::Compress {
-                cutoff_hz: (cutoff * 1.3).min(4_000.0),
-                ratio: 1.0 + (ratio - 1.0) * 0.5,
-            }),
+            "EQ, fuller gain",
+            Settings {
+                eq_strength: 0.8,
+                max_eq_gain_db: 25.0,
+                ..half
+            },
         ),
-        (
-            "Strong frequency compression",
-            with(Lowering::Compress {
-                cutoff_hz: cutoff,
-                ratio,
-            }),
-        ),
-        (
-            "Transposition (octave down)",
-            with(Lowering::Transpose {
-                src_lo_hz: 4_000.0,
-                src_hi_hz: 9_000.0,
-                factor: 0.5,
-                mix_db: 0.0,
-            }),
-        ),
+        fourth,
+        fifth,
     ]
 }
 
@@ -159,6 +192,7 @@ mod tests {
     use super::*;
     use crate::dsp::db_to_lin;
     use crate::dsp::testutil::{amplitude_at, sine};
+    use crate::profile::{Threshold, Tinnitus};
 
     fn clip(amp: f32) -> Clip {
         let sr = 48_000;
@@ -174,6 +208,26 @@ mod tests {
         }
     }
 
+    /// Good hearing except a dip at 3 and 4 kHz.
+    fn notched_profile() -> Profile {
+        let ear: Vec<Threshold> = crate::profile::TEST_FREQS
+            .iter()
+            .map(|&hz| Threshold {
+                hz,
+                dbfs: Some(if hz == 3_000.0 || hz == 4_000.0 {
+                    -50.0
+                } else {
+                    -80.0
+                }),
+            })
+            .collect();
+        Profile {
+            left: ear.clone(),
+            right: ear,
+            ..Profile::default()
+        }
+    }
+
     #[test]
     fn bypass_of_a_quiet_clip_is_the_clip() {
         let c = clip(0.2);
@@ -184,15 +238,18 @@ mod tests {
     fn every_preset_stays_under_the_ceiling_even_for_a_hot_clip() {
         let hot = clip(3.0);
         let ceiling = db_to_lin(CEILING_DB) + 1e-6;
-        for (name, s) in presets(None) {
-            let out = render(&hot, &s, None);
-            assert_eq!(out.len(), hot.len(), "{name}");
-            let peak = out
-                .left
-                .iter()
-                .chain(&out.right)
-                .fold(0f32, |m, v| m.max(v.abs()));
-            assert!(peak <= ceiling, "{name} peaked at {peak}");
+        let profile = notched_profile();
+        for p in [None, Some(&profile)] {
+            for (name, s) in presets(p) {
+                let out = render(&hot, &s, p);
+                assert_eq!(out.len(), hot.len(), "{name}");
+                let peak = out
+                    .left
+                    .iter()
+                    .chain(&out.right)
+                    .fold(0f32, |m, v| m.max(v.abs()));
+                assert!(peak <= ceiling, "{name} peaked at {peak}");
+            }
         }
     }
 
@@ -207,9 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn lowering_preset_moves_the_6k_tone_down() {
+    fn compression_moves_the_6k_tone_down() {
         let c = clip(0.1);
+        let lowering = Lowering::Compress {
+            cutoff_hz: 2_000.0,
+            ratio: 2.0,
+        };
         let s = Settings {
+            lowering,
             compress: false,
             eq_strength: 0.0,
             ..Settings::default()
@@ -217,6 +279,83 @@ mod tests {
         let out = render(&c, &s, None);
         let body = &out.left[9_600..38_400];
         assert!(amplitude_at(body, 6_000.0, 48_000.0) < 0.001);
-        assert!(amplitude_at(body, s.lowering.map_hz(6_000.0), 48_000.0) > 0.01);
+        assert!(amplitude_at(body, lowering.map_hz(6_000.0), 48_000.0) > 0.01);
+    }
+
+    #[test]
+    fn presets_follow_the_measured_shape() {
+        let names = |p: Option<&Profile>| presets(p).into_iter().map(|x| x.0).collect::<Vec<_>>();
+        assert_eq!(names(None).len(), 5);
+        assert!(names(None).contains(&"Frequency compression"));
+
+        let mut p = notched_profile();
+        let with_notch = presets(Some(&p));
+        let (_, copy) = with_notch
+            .iter()
+            .find(|x| x.0 == "Notch band copied down")
+            .expect("notch preset");
+        let Lowering::Transpose {
+            src_lo_hz,
+            src_hi_hz,
+            ..
+        } = copy.lowering
+        else {
+            panic!()
+        };
+        assert!(src_lo_hz < 3_000.0 && src_hi_hz > 4_000.0);
+
+        p.tinnitus_right = vec![Tinnitus {
+            hz: 4_000.0,
+            dbfs: -45.0,
+        }];
+        let guarded = presets(Some(&p));
+        assert!(
+            guarded
+                .iter()
+                .any(|x| x.0 == "EQ, sparing the tinnitus pitch" && x.1.tinnitus_guard)
+        );
+        assert!(!guarded.iter().any(|x| x.0 == "Frequency compression"));
+    }
+
+    #[test]
+    fn the_guard_changes_only_the_ear_with_a_tinnitus_match() {
+        let mut p = notched_profile();
+        p.tinnitus_right = vec![Tinnitus {
+            hz: 3_500.0,
+            dbfs: -45.0,
+        }];
+        let sr = 48_000;
+        let tone = sine(3_500.0, sr as f32, 0.05, 48_000);
+        let c = Clip {
+            sr,
+            left: tone.clone(),
+            right: tone,
+        };
+        let base = Settings {
+            compress: false,
+            ..Settings::default()
+        };
+        let open = render(&c, &base, Some(&p));
+        let guarded = render(
+            &c,
+            &Settings {
+                tinnitus_guard: true,
+                ..base
+            },
+            Some(&p),
+        );
+        let level = |x: &[f32]| amplitude_at(&x[9_600..38_400], 3_500.0, 48_000.0);
+        // Loudness matching rescales both ears together, so compare the
+        // balance between ears: guarded, the right ear loses its boost.
+        let balance = |c: &Clip| level(&c.right) / level(&c.left);
+        assert!((balance(&open) - 1.0).abs() < 0.02);
+        assert!(balance(&guarded) < 0.5, "balance {}", balance(&guarded));
+    }
+
+    #[test]
+    fn settings_saved_before_the_guard_existed_still_load() {
+        let old = r#"{"lowering":"Off","eq_strength":0.5,"max_eq_gain_db":20.0,"compress":true}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert!(!s.tinnitus_guard);
     }
 }

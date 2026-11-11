@@ -8,11 +8,14 @@ use std::time::Duration;
 use eframe::egui::{self, Color32, RichText};
 use kvimh::audio::{self, Engine, Recorder};
 use kvimh::dsp::spectral::Lowering;
-use kvimh::profile::{self, Ear, MAX_TEST_DBFS, Profile, Threshold};
+use kvimh::profile::{self, Ear, MAX_TEST_DBFS, Profile, Threshold, Tinnitus};
 use kvimh::render::{self, Clip, Settings};
 use kvimh::wav;
 
 use crate::check::Check;
+
+mod hearing;
+mod wordtest;
 
 const RECORD_SECS: f32 = 15.0;
 const REFERENCE_DBFS: f32 = -40.0;
@@ -25,6 +28,7 @@ enum Tab {
     Check,
     Listen,
     Blind,
+    Words,
 }
 
 struct Variant {
@@ -57,6 +61,10 @@ pub struct App {
     // blind test
     blind: Option<Blind>,
     summary: Vec<(String, f32, usize)>,
+    // hearing check extras
+    matching: Option<hearing::Matching>,
+    // word test
+    words: wordtest::Words,
 }
 
 fn clips_dir() -> PathBuf {
@@ -80,24 +88,22 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// A made-up sloping high-frequency loss, a little worse in the left ear.
+/// A made-up profile: a dip around 3–4 kHz, a little worse in the right
+/// ear, one reading that is too good to be true, and a tinnitus match.
 fn demo_profile() -> Profile {
-    let ear = |worse: f32| -> Vec<Threshold> {
+    let ear = |worse: f32, fluke: f32| -> Vec<Threshold> {
         let levels = [
-            -62.0, -74.0, -80.0, -76.0, -62.0, -44.0, -30.0, -22.0, -16.0,
+            -58.0, -70.0, -78.0, -77.0, -74.0, -50.0, -47.0, -66.0, -62.0, -52.0,
         ];
         let mut v: Vec<Threshold> = profile::TEST_FREQS
             .iter()
             .zip(levels)
             .map(|(&hz, l): (&f32, f32)| Threshold {
                 hz,
-                dbfs: Some(l + if hz > 1_500.0 { worse } else { 0.0 }),
+                dbfs: Some(l + if hz > 2_000.0 { worse } else { 0.0 }),
             })
             .collect();
-        v.push(Threshold {
-            hz: 10_000.0,
-            dbfs: (worse == 0.0).then_some(-11.0),
-        });
+        v[7].dbfs = v[7].dbfs.map(|d| d - fluke);
         v.push(Threshold {
             hz: 12_000.0,
             dbfs: None,
@@ -105,10 +111,20 @@ fn demo_profile() -> Profile {
         v
     };
     Profile {
-        taken_unix: 0,
         device: "demo".into(),
-        left: ear(5.0),
-        right: ear(0.0),
+        left: ear(0.0, 22.0),
+        right: ear(8.0, 0.0),
+        tinnitus_right: vec![
+            Tinnitus {
+                hz: 3_600.0,
+                dbfs: -40.0,
+            },
+            Tinnitus {
+                hz: 7_000.0,
+                dbfs: -45.0,
+            },
+        ],
+        ..Profile::default()
     }
 }
 
@@ -151,6 +167,7 @@ impl App {
             "check" => Tab::Check,
             "listen" => Tab::Listen,
             "blind" => Tab::Blind,
+            "words" => Tab::Words,
             _ => Tab::Setup,
         };
         if demo {
@@ -178,17 +195,12 @@ impl App {
             Ok(e) => (Some(e), String::new()),
             Err(e) => (None, format!("Could not open the sound device: {e}")),
         };
-        // Kept settings win; otherwise start from what the hearing check suggests.
+        // Kept settings win; otherwise start with the EQ alone.
         let saved_profile = Profile::load();
         let settings = std::fs::read_to_string(profile::data_dir().join("settings.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_else(|| Settings {
-                lowering: saved_profile
-                    .as_ref()
-                    .map_or(Settings::default().lowering, |p| p.suggest_compress()),
-                ..Settings::default()
-            });
+            .unwrap_or_default();
         let mut app = App {
             tab: Tab::Setup,
             status,
@@ -204,6 +216,8 @@ impl App {
             processed: None,
             blind: None,
             summary: load_summary(),
+            matching: None,
+            words: wordtest::Words::load(),
         };
         if let Some(first) = app.clips.last().cloned() {
             app.select_clip(first);
@@ -456,7 +470,22 @@ impl App {
             let finished = check.finished();
             let cancelled = ui.button("Stop the check").clicked();
             if finished {
-                let mut profile = self.check.take().map(|c| c.profile).unwrap_or_default();
+                // A full run or a retest of one tone: either way the new
+                // readings replace the old ones, tone by tone, and the
+                // tinnitus match is kept.
+                let measured = self.check.take().map(|c| c.profile).unwrap_or_default();
+                let mut profile = match self.profile.take() {
+                    Some(mut old) => {
+                        for ear in [Ear::Left, Ear::Right] {
+                            for t in measured.ear(ear) {
+                                old.set_threshold(ear, *t);
+                            }
+                        }
+                        old.device = measured.device;
+                        old
+                    }
+                    None => measured,
+                };
                 profile.taken_unix = profile::now_unix();
                 self.status = match profile.save() {
                     Ok(path) => format!("Hearing check saved to {}", path.display()),
@@ -475,41 +504,7 @@ impl App {
             return;
         }
 
-        ui.label(
-            "About eight minutes. Sit somewhere quiet, headset on the right way round, volume as you set \
-             it on the Setup tab. The left ear is tested first, then the right, eleven tones each.",
-        );
-        ui.add_space(6.0);
-        let label = if self.profile.is_some() {
-            "Run the check again"
-        } else {
-            "Start the hearing check"
-        };
-        if ui.button(RichText::new(label).size(16.0)).clicked() {
-            engine.stop();
-            self.check = Some(Check::new(now, &engine.device_name));
-        }
-        ui.add_space(12.0);
-        match &self.profile {
-            Some(p) => {
-                audiogram(ui, p);
-                ui.add_space(6.0);
-                if let Some(edge) = p.usable_edge_hz(50.0) {
-                    ui.label(format!(
-                        "Usable hearing runs to about {:.1} kHz. Above that, making sounds louder is not \
-                         enough, which is where frequency lowering comes in.",
-                        edge / 1_000.0
-                    ));
-                }
-                ui.weak(
-                    "This is a relative measurement on this headset at this volume, not a clinical audiogram. \
-                     \"Loss\" is measured against your own best low-frequency hearing.",
-                );
-            }
-            None => {
-                ui.weak("No hearing check yet. Until there is one, the EQ stays flat.");
-            }
-        }
+        self.ui_check_idle(ui, now);
     }
 
     // ----- Clips (shared by Listen and Blind) -------------------------------
@@ -600,26 +595,29 @@ impl App {
         ui.horizontal(|ui| {
             ui.radio_value(&mut mode, 0, "Off");
             ui.radio_value(&mut mode, 1, "Compression (squeeze the highs down)");
-            ui.radio_value(
-                &mut mode,
-                2,
-                "Transposition (copy the highs an octave down)",
-            );
+            ui.radio_value(&mut mode, 2, "Transposition (copy a band lower down)");
         });
         if mode != before {
+            let profile = self.profile.as_ref();
             self.settings.lowering = match mode {
                 0 => Lowering::Off,
-                1 => self
-                    .profile
-                    .as_ref()
-                    .map(|p| p.suggest_compress())
-                    .unwrap_or(Settings::default().lowering),
-                _ => Lowering::Transpose {
-                    src_lo_hz: 4_000.0,
-                    src_hi_hz: 9_000.0,
-                    factor: 0.5,
-                    mix_db: 0.0,
-                },
+                1 => profile.map_or(
+                    Lowering::Compress {
+                        cutoff_hz: 2_000.0,
+                        ratio: 2.0,
+                    },
+                    |p| p.suggest_compress(),
+                ),
+                // With a dip in the hearing, copy that band to just below
+                // it; otherwise copy the top octave down.
+                _ => profile
+                    .and_then(|p| p.suggest_notch_copy())
+                    .unwrap_or(Lowering::Transpose {
+                        src_lo_hz: 4_000.0,
+                        src_hi_hz: 9_000.0,
+                        factor: 0.5,
+                        mix_db: 0.0,
+                    }),
             };
         }
         match &mut self.settings.lowering {
@@ -639,18 +637,24 @@ impl App {
             Lowering::Transpose {
                 src_lo_hz,
                 src_hi_hz,
+                factor,
                 mix_db,
-                ..
             } => {
                 ui.add(
-                    egui::Slider::new(src_lo_hz, 2_000.0..=6_000.0)
-                        .step_by(100.0)
+                    egui::Slider::new(src_lo_hz, 1_500.0..=8_000.0)
+                        .step_by(50.0)
                         .text("Hz — copy from"),
                 );
                 ui.add(
-                    egui::Slider::new(src_hi_hz, 6_000.0..=12_000.0)
-                        .step_by(100.0)
+                    egui::Slider::new(src_hi_hz, 2_500.0..=12_000.0)
+                        .step_by(50.0)
                         .text("Hz — copy up to"),
+                );
+                *src_hi_hz = src_hi_hz.max(*src_lo_hz + 200.0);
+                ui.add(
+                    egui::Slider::new(factor, 0.4..=0.9)
+                        .step_by(0.01)
+                        .text("× — how far down (0.5 = an octave)"),
                 );
                 ui.add(
                     egui::Slider::new(mix_db, -12.0..=6.0)
@@ -672,7 +676,12 @@ impl App {
             if ui.button("Set from my hearing check").clicked()
                 && let Some(p) = &self.profile
             {
-                self.settings.lowering = p.suggest_compress();
+                self.settings.lowering = match self.settings.lowering {
+                    Lowering::Transpose { .. } => {
+                        p.suggest_notch_copy().unwrap_or(self.settings.lowering)
+                    }
+                    _ => p.suggest_compress(),
+                };
             }
         }
 
@@ -690,6 +699,17 @@ impl App {
                 .step_by(1.0)
                 .text("dB — most the EQ may add"),
         );
+        let matched = self.profile.as_ref().is_some_and(|p| p.has_tinnitus());
+        ui.add_enabled(
+            matched,
+            egui::Checkbox::new(
+                &mut self.settings.tinnitus_guard,
+                "Leave the band around my tinnitus pitch un-boosted",
+            ),
+        );
+        if !matched {
+            ui.weak("Match your tinnitus pitch on the Hearing check tab to use this.");
+        }
         ui.checkbox(
             &mut self.settings.compress,
             "Bring quiet sounds up (compression)",
@@ -890,11 +910,15 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Check, "2 · Hearing check");
                 ui.selectable_value(&mut self.tab, Tab::Listen, "3 · Listen");
                 ui.selectable_value(&mut self.tab, Tab::Blind, "4 · Blind test");
+                ui.selectable_value(&mut self.tab, Tab::Words, "5 · Word test");
             });
             if self.tab != before {
-                // Leaving a screen silences it and abandons a check in progress.
+                // Leaving a screen silences it and abandons a check, a
+                // tinnitus match or a word test in progress.
                 self.stop();
                 self.check = None;
+                self.matching = None;
+                self.words.abandon();
             }
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -903,6 +927,7 @@ impl eframe::App for App {
                     Tab::Check => self.ui_check(ui),
                     Tab::Listen => self.ui_listen(ui),
                     Tab::Blind => self.ui_blind(ui),
+                    Tab::Words => self.ui_words(ui),
                 }
                 if !self.status.is_empty() {
                     ui.add_space(10.0);
@@ -1008,6 +1033,26 @@ fn audiogram(ui: &mut egui::Ui, profile: &Profile) {
             } else {
                 painter.circle_stroke(p, 4.5, (2.0, colour));
             }
+        }
+    }
+    // Each matched tinnitus tone, as a dashed line in the ear's colour. The
+    // two ears' labels sit at different heights so close pitches stay legible.
+    for (ear, colour, label_up) in [(Ear::Left, LEFT, 14.0), (Ear::Right, RIGHT, 2.0)] {
+        for t in profile.tinnitus(ear) {
+            let px = x(t.hz);
+            let mut py = rect.top();
+            while py < rect.bottom() {
+                let end = (py + 5.0).min(rect.bottom());
+                painter.line_segment([egui::pos2(px, py), egui::pos2(px, end)], (1.5, colour));
+                py += 9.0;
+            }
+            painter.text(
+                egui::pos2(px, rect.bottom() - label_up),
+                egui::Align2::CENTER_BOTTOM,
+                "ringing",
+                font.clone(),
+                colour,
+            );
         }
     }
     painter.text(
